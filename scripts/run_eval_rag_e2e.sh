@@ -28,4 +28,6 @@ python rag/eval_rag.py \
 --gold_data_mode ans \
 --recalculate \
 --eval_all_checkpoints \
---predictions_path results.txt
+--predictions_path results.txt \
+--eval_batch_size 2 
+
