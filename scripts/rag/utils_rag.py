@@ -6,6 +6,7 @@ import pickle
 import re
 import socket
 import string
+import sys
 from collections import Counter
 from logging import getLogger
 from pathlib import Path
@@ -21,6 +22,8 @@ from datasets import load_dataset
 
 from transformers import BartTokenizer, RagTokenizer, T5Tokenizer
 
+sys.path.append("../../GRADE")
+from preprocess.keyword_extractor import KeywordExtractor
 
 def load_bm25(in_path):
     dataset = load_dataset("csv", data_files=[in_path], split="train", delimiter="\t", column_names=["title", "text"])
@@ -54,6 +57,14 @@ def load_bm25_results(in_path):
         total += len(queries)
         d_query_pid.update(dict(zip(queries, bm_rslt)))
     return d_query_pid
+
+def _is_valid_keyword(keyword):
+    return keyword not in string.punctuation
+
+def keywordify_line(keyword_extractor, line):
+    keywords = keyword_extractor.candi_extract(line)
+    keywords = [keyword for keyword in keyword if _is_valid_keyword(keyword)]
+    return " ".join(keywords)
 
 
 def encode_line(tokenizer, line, max_length, padding_side, pad_to_max_length=True, return_tensors="pt"):
@@ -141,6 +152,11 @@ class Seq2SeqDataset(Dataset):
         if self.domain_file is not None:
             domain_line = linecache.getline(str(self.domain_file), index).rstrip("\n")
             assert domain_line, f"empty domain line for index {index}"
+
+        kwe = KeywordExtractor()
+        source_line = keywordify_line(keyword_extractor, source_line)
+
+        
 
         # Need to add eos token manually for T5
         if isinstance(self.tokenizer, T5Tokenizer):

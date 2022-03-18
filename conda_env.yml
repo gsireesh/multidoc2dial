@@ -12,7 +12,7 @@ dependencies:
     - tensorboard==2.5.0
     - tensorboardX==2.1
     - transformers==4.12.1
-    - pytorch_lightning==1.1.8
+    - pytorch_lightning>=1.2.0
     - datasets==1.16.1
     - GitPython
     - psutil
@@ -21,3 +21,4 @@ dependencies:
     - sacrebleu
     - rank-bm25
     - faiss-cpu
+    - nltk
