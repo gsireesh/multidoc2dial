@@ -69,6 +69,18 @@ def encode_line(tokenizer, line, max_length, padding_side, pad_to_max_length=Tru
         **extra_kw,
     )
 
+def encode_utts(tokenizer, lines, max_length, pad_to_max_length=True, return_tensors="pt"):
+    extra_kw = {}
+    tokenizer.padding_side = "right"
+    return tokenizer(
+        lines,
+        max_length=max_length,
+        padding="max_length" if pad_to_max_length else None,
+        truncation=True,
+        return_tensors=return_tensors,
+        add_special_tokens=True,
+        **extra_kw,
+    )
 
 def encode_line2(tokenizer, line, max_length, padding_side, pad_to_max_length=True, return_tensors="pt"):
     extra_kw = {"add_prefix_space": True} if isinstance(tokenizer, BartTokenizer) and not line.startswith(" ") else {}
@@ -84,7 +96,6 @@ def encode_line2(tokenizer, line, max_length, padding_side, pad_to_max_length=Tr
         **extra_kw,
     )
 
-
 def trim_batch(
     input_ids,
     pad_token_id,
@@ -96,6 +107,23 @@ def trim_batch(
         return input_ids[:, keep_column_mask]
     else:
         return (input_ids[:, keep_column_mask], attention_mask[:, keep_column_mask])
+
+def get_dialogs_from_line(line):
+    query, dialog = line.split('[SEP]')
+    query = query.strip()
+    if len(dialog) == 0:
+        return [query]
+    dialogs = []
+    utts = dialog.strip().split('||')
+    for utt in reversed(utts):
+        utt = utt.strip()
+        if utt[0] == 'a':
+            utt = utt[7:]
+        else:
+            utt = utt[6:]
+        dialogs.append(utt)
+    dialogs.append(query)
+    return dialogs
 
 
 class Seq2SeqDataset(Dataset):
@@ -120,6 +148,7 @@ class Seq2SeqDataset(Dataset):
         self.src_lens = self.get_char_lens(self.src_file)
         self.max_source_length = max_source_length
         self.max_target_length = max_target_length
+        print (self.max_target_length)
         assert min(self.src_lens) > 0, f"found empty line in {self.src_file}"
         self.tokenizer = tokenizer
         self.prefix = prefix
@@ -146,7 +175,7 @@ class Seq2SeqDataset(Dataset):
         if isinstance(self.tokenizer, T5Tokenizer):
             source_line += self.tokenizer.eos_token
             tgt_line += self.tokenizer.eos_token
-
+        utts = get_dialogs_from_line(source_line)
         # Pad source and target to the right
         source_tokenizer = (
             self.tokenizer.question_encoder if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
@@ -155,16 +184,21 @@ class Seq2SeqDataset(Dataset):
         source_inputs = encode_line2(source_tokenizer, source_line, self.max_source_length, "right")
         target_inputs = encode_line(target_tokenizer, tgt_line, self.max_target_length, "right")
 
+        dialogue_inputs = encode_utts(target_tokenizer, utts, 128)
         source_ids = source_inputs["input_ids"].squeeze()
         target_ids = target_inputs["input_ids"].squeeze()
+        dialogue_input_ids = dialogue_inputs["input_ids"]
         src_mask = source_inputs["attention_mask"].squeeze()
         src_token_type_ids = source_inputs["token_type_ids"].squeeze()
+        dialogue_mask = dialogue_inputs["attention_mask"]
         return {
             "input_ids": source_ids,
             "attention_mask": src_mask,
             "token_type_ids": src_token_type_ids,
             "decoder_input_ids": target_ids,
             "domain": domain_line,
+            "dialogue_input_ids": dialogue_input_ids,
+            "dialogue_attention_mask" : dialogue_mask
         }
 
     @staticmethod
@@ -177,6 +211,8 @@ class Seq2SeqDataset(Dataset):
         token_type_ids = torch.stack([x["token_type_ids"] for x in batch])
         target_ids = torch.stack([x["decoder_input_ids"] for x in batch])
         domain = [x["domain"] for x in batch]
+        dialogue_input_ids = [x["dialogue_input_ids"] for x in batch]
+        dialogue_attention_mask = [x["dialogue_attention_mask"] for x in batch]
         tgt_pad_token_id = (
             self.tokenizer.generator.pad_token_id
             if isinstance(self.tokenizer, RagTokenizer)
@@ -187,6 +223,7 @@ class Seq2SeqDataset(Dataset):
             if isinstance(self.tokenizer, RagTokenizer)
             else self.tokenizer.pad_token_id
         )
+        
         y = trim_batch(target_ids, tgt_pad_token_id)
         source_ids, source_mask = trim_batch(input_ids, src_pad_token_id, attention_mask=masks)
         keep_col_mask = input_ids.ne(src_pad_token_id).any(dim=0)
@@ -197,6 +234,8 @@ class Seq2SeqDataset(Dataset):
             "token_type_ids": token_type_ids,
             "decoder_input_ids": y,
             "domain": domain,
+            "dialogue_input_ids" : dialogue_input_ids,
+            "dialogue_attention_mask" : dialogue_attention_mask
         }
         return batch
 
