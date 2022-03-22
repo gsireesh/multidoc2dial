@@ -20,6 +20,7 @@ from transformers.utils import logging
 logger = logging.get_logger(__name__)
 
 
+# TODO
 class DialDocRagModel(RagModel):
     def __init__(
         self,
@@ -484,6 +485,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
     def get_attn_mask(tokens_tensor: torch.LongTensor) -> torch.tensor:
         return tokens_tensor != 0
 
+    # this is where validation stuff happens
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,

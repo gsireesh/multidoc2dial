@@ -309,7 +309,6 @@ def get_top_n_indices(bm25, query, n=5):
     sorted_indices = sorted(scores_i, key=lambda score: score[1], reverse=True)
     return sorted_indices[:n]
 
-
 class DialDocRagRetriever(RagRetriever):
     def __init__(self, config, question_encoder_tokenizer, generator_tokenizer, index=None, init_retrieval=True):
         super().__init__(
@@ -372,6 +371,8 @@ class DialDocRagRetriever(RagRetriever):
             index=index,
         )
 
+    # TODO: this is where we format things for BART
+    # input strings have dialog historyx
     def postprocess_docs(self, docs, input_strings, prefix, n_docs, return_tensors=None):
         r"""
         Postprocessing retrieved ``docs`` and combining them with ``input_strings``.
