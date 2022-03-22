@@ -1,5 +1,8 @@
+from ast import keyword
+from base64 import encode
 import itertools
 import json
+from lib2to3.pgen2 import token
 import linecache
 import os
 import pickle
@@ -20,10 +23,11 @@ from torch.utils.data import Dataset
 from rank_bm25 import BM25Okapi
 from datasets import load_dataset
 
-from transformers import BartTokenizer, RagTokenizer, T5Tokenizer
+from transformers import BartTokenizer, RagTokenizer, T5Tokenizer, BatchEncoding
 
 sys.path.append("../../GRADE")
-from preprocess.keyword_extractor import KeywordExtractor
+from preprocess.prepare_data import PreprocessTool
+import networkx as nx
 
 def load_bm25(in_path):
     dataset = load_dataset("csv", data_files=[in_path], split="train", delimiter="\t", column_names=["title", "text"])
@@ -58,13 +62,92 @@ def load_bm25_results(in_path):
         d_query_pid.update(dict(zip(queries, bm_rslt)))
     return d_query_pid
 
-def _is_valid_keyword(keyword):
-    return keyword not in string.punctuation
+def keywordify_dialogue(keyword_extractor, dialogue, c2id, concept_graph):
+    keywords_by_turn = [
+        keyword_extractor.extract_keywords(
+            turn,
+            keyphrase_ngram_range=(1, 2), 
+            stop_words='english', 
+            use_mmr=True,
+            diversity=0.7, 
+            top_n=5
+            ) 
+        for turn in dialogue]
 
-def keywordify_line(keyword_extractor, line):
-    keywords = keyword_extractor.candi_extract(line)
-    keywords = [keyword for keyword in keyword if _is_valid_keyword(keyword)]
-    return " ".join(keywords)
+    filtered_keywords = [[keyword for keyword in turn if keyword in c2id and keyword in concept_graph.nodes()] for turn in keywords_by_turn]
+    return filtered_keywords
+
+def clean_line(line):
+    processed_dialogue = []
+    dialogue = line.split("||")
+    question, r1 = dialogue[0].split("[SEP]")
+    for turn in [question, r1, *dialogue[1:]]:
+        if turn.startswith("agent:"):
+            processed_dialogue.append(turn[len("agent: "):])
+        elif turn.startswith("user:"):
+            processed_dialogue.append(turn[len("user: "):])
+        else:
+            processed_dialogue.append(turn)
+    return processed_dialogue
+
+def encode_keywords(tokenizer, keywords, keyword_turn_mask, max_length, padding_side, pad_to_max_length=True):
+    
+    if not isinstance(tokenizer, BartTokenizer):
+        raise AssertionError("This method hardcodes special token conventions from BART! Check before you use other tokenizers")
+
+    extra_kw = {"add_prefix_space": True} if isinstance(tokenizer, BartTokenizer) else {}
+    tokenizer.padding_side = padding_side
+    tokenizer_outs = tokenizer(
+        keywords,
+        max_length=max_length,
+        padding="max_length" if pad_to_max_length else None,
+        truncation=True,
+        return_tensors="pt",
+        add_special_tokens=True,
+        **extra_kw,
+    )
+    input_ids = [101]
+    attention_mask = [1]
+    token_type_ids  = [0]
+    turn_mask = [-1]
+    keyword_idx_map = [-1]
+
+
+    for i, (keyword_token_list, turn_idx) in enumerate(zip(tokenizer_outs["input_ids"], keyword_turn_mask)):
+        n_tokens = len(keyword_token_list)
+        turn_mask.extend([turn_idx] * n_tokens)
+        keyword_idx_map.extend([i] * n_tokens)
+        input_ids.extend(keyword_token_list)
+        attention_mask.extend(tokenizer_outs[i]["attention_mask"])
+        token_type_ids.extend(tokenizer_outs[i]["token_type_ids"])
+
+    # add the EOS token
+    input_ids.append(102)
+    attention_mask.append(1)
+    token_type_ids.append(0)
+    turn_mask.append(-1)
+    keyword_idx_map.append(-1)
+
+    # not worrying about truncation here because this is just keywords, it really shouldn't be an issue
+    if len(input_ids) > max_length:
+        raise AssertionError("Somehow, you have more keywords than max_len.")
+
+    if pad_to_max_length:
+        input_ids.extend([0] * (max_length - len(input_ids)))
+        attention_mask.extend([0] * (max_length - len(attention_mask)))
+        token_type_ids.extend([0] * (max_length - len(token_type_ids)))
+        turn_mask.extend([-1] * (max_length - len(turn_mask)))
+        keyword_idx_map.extend([-1] * (max_length - len(keyword_idx_map)))
+
+    return BatchEncoding({
+        "input_ids": torch.tensor(input_ids, dtype=torch.int64),
+        "token_type_ids": torch.tensor(token_type_ids, dtype=torch.int64),
+        "attention_mask": torch.tensor(attention_mask, dtype=torch.int64),
+        "turn_mask": torch.tensor(turn_mask, dtype=torch.int64),
+        "keyword_idx_map": torch.tensor(keyword_idx_map, dtype=torch.int64)
+    })
+
+    
 
 
 def encode_line(tokenizer, line, max_length, padding_side, pad_to_max_length=True, return_tensors="pt"):
@@ -139,6 +222,13 @@ class Seq2SeqDataset(Dataset):
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
 
+        self.keybert = KeyBERT()
+        p_tool = PreprocessTool()
+        c2id, id2c, _, _, = p_tool.load_resources()
+        self.c2id = c2id
+        self.id2c = id2c
+        self.cpnet = p_tool.load_cpnet()
+
     def __len__(self):
         return len(self.src_lens)
 
@@ -153,10 +243,13 @@ class Seq2SeqDataset(Dataset):
             domain_line = linecache.getline(str(self.domain_file), index).rstrip("\n")
             assert domain_line, f"empty domain line for index {index}"
 
-        kwe = KeywordExtractor()
-        source_line = keywordify_line(keyword_extractor, source_line)
+        dialog_utterances = clean_line(source_line)
+        keywords_by_turn = keywordify_dialogue(dialog_utterances)
 
-        
+        all_keywords = list(itertools.chain(*keywords_by_turn))
+        turn_mask = [1] * len(keywords_by_turn[0]) + [0] * len(list(itertools.chain(*keywords_by_turn[1:])))
+        all_keyword_ids = torch.tensor([self.c2id[keyword] for keyword in all_keywords], dtype=torch.int64)
+    
 
         # Need to add eos token manually for T5
         if isinstance(self.tokenizer, T5Tokenizer):
@@ -168,31 +261,41 @@ class Seq2SeqDataset(Dataset):
             self.tokenizer.question_encoder if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
         )
         target_tokenizer = self.tokenizer.generator if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
-        source_inputs = encode_line2(source_tokenizer, source_line, self.max_source_length, "right")
+        
+        keyword_inputs = encode_keywords(source_tokenizer, all_keywords, turn_mask, self.max_source_length, "right")
         target_inputs = encode_line(target_tokenizer, tgt_line, self.max_target_length, "right")
 
-        source_ids = source_inputs["input_ids"].squeeze()
+        source_ids = keyword_inputs["input_ids"]
         target_ids = target_inputs["input_ids"].squeeze()
-        src_mask = source_inputs["attention_mask"].squeeze()
-        src_token_type_ids = source_inputs["token_type_ids"].squeeze()
+        src_mask = keyword_inputs["attention_mask"]
+        src_token_type_ids = keyword_inputs["token_type_ids"]
         return {
             "input_ids": source_ids,
             "attention_mask": src_mask,
             "token_type_ids": src_token_type_ids,
             "decoder_input_ids": target_ids,
             "domain": domain_line,
+            "turn_mask": keyword_inputs["turn_mask"],
+            "keyword_idx_map": keyword_inputs["keyword_idx_map"],
+            "keyword_ids": all_keyword_ids,
         }
 
     @staticmethod
     def get_char_lens(data_file):
         return [len(x) for x in Path(data_file).open().readlines()]
 
+    # TODO: make sure to modify this!!
     def collate_fn(self, batch) -> Dict[str, torch.Tensor]:
         input_ids = torch.stack([x["input_ids"] for x in batch])
         masks = torch.stack([x["attention_mask"] for x in batch])
         token_type_ids = torch.stack([x["token_type_ids"] for x in batch])
         target_ids = torch.stack([x["decoder_input_ids"] for x in batch])
         domain = [x["domain"] for x in batch]
+        turn_masks = torch.stack([x["turn_mask"] for x in batch])
+        keyword_idx_map = torch.stack([x["keyword_idx_map"] for x in batch])
+        keyword_ids = torch.nn.utils.rnn.pad_sequence([x["keyword_ids"] for x in batch], batch_first=True, padding_value=-1)
+
+
         tgt_pad_token_id = (
             self.tokenizer.generator.pad_token_id
             if isinstance(self.tokenizer, RagTokenizer)
@@ -203,6 +306,7 @@ class Seq2SeqDataset(Dataset):
             if isinstance(self.tokenizer, RagTokenizer)
             else self.tokenizer.pad_token_id
         )
+
         y = trim_batch(target_ids, tgt_pad_token_id)
         source_ids, source_mask = trim_batch(input_ids, src_pad_token_id, attention_mask=masks)
         keep_col_mask = input_ids.ne(src_pad_token_id).any(dim=0)
@@ -213,6 +317,10 @@ class Seq2SeqDataset(Dataset):
             "token_type_ids": token_type_ids,
             "decoder_input_ids": y,
             "domain": domain,
+            "turn_mask": turn_masks,
+            "keyword_idx_map": keyword_idx_map,
+            "keyword_ids": keyword_ids,
+
         }
         return batch
 
