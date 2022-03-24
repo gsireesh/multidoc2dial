@@ -2,9 +2,13 @@
 
 export PYTHONPATH="../":"${PYTHONPATH}"
 export TOKENIZERS_PARALLELISM=false
+
+export CHECKPOINTS=/usr0/home/sgururaj/src/11-797-multidoc2dial/multidoc2dial/checkpoints
+export HF_HOME=~/hf_home
+
 domain=$1 # all dmv ssa va studentaid
 seg=$2 # token structure
-score=$3 # original reranking reranking_original
+score=$3 # original rerankiclearng reranking_original
 task=$4 # grounding generation
 seed=$RANDOM 
 
@@ -12,6 +16,8 @@ dpr=dpr-$domain-$seg
 MODEL_NAME_OR_PATH=$CHECKPOINTS/rag-$dpr
 KB_FOLDER=../data/mdd_kb/knowledge_dataset-$dpr
 DATA_DIR=../data/mdd_$domain/dd-$task-$seg
+
+pwd
 
 python rag/finetune_rag_dialdoc.py \
     --seed $seed \
@@ -33,7 +39,7 @@ python rag/finetune_rag_dialdoc.py \
     --n_val -1 \
     --n_test -1 \
     --n_docs 5 \
-    --train_batch_size 8 \
+    --train_batch_size 1 \
     --eval_batch_size 2 \
     --max_combined_length 300 \
     --max_source_length 128 \
@@ -50,4 +56,4 @@ python rag/finetune_rag_dialdoc.py \
     --learning_rate 3e-05 \
     --num_train_epochs 2 \
     --warmup_steps 500 \
-    --gradient_accumulation_steps 1
+    --gradient_accumulation_steps 8

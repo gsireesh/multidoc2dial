@@ -372,7 +372,7 @@ class DialDocRagRetriever(RagRetriever):
         )
 
     # TODO: this is where we format things for BART
-    # input strings have dialog historyx
+    # input strings have dialog history
     def postprocess_docs(self, docs, input_strings, prefix, n_docs, return_tensors=None):
         r"""
         Postprocessing retrieved ``docs`` and combining them with ``input_strings``.

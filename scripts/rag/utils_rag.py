@@ -28,6 +28,7 @@ from transformers import BartTokenizer, RagTokenizer, T5Tokenizer, BatchEncoding
 sys.path.append("../../GRADE")
 from preprocess.prepare_data import PreprocessTool
 import networkx as nx
+from keybert import KeyBERT
 
 def load_bm25(in_path):
     dataset = load_dataset("csv", data_files=[in_path], split="train", delimiter="\t", column_names=["title", "text"])
@@ -74,7 +75,7 @@ def keywordify_dialogue(keyword_extractor, dialogue, c2id, concept_graph):
             ) 
         for turn in dialogue]
 
-    filtered_keywords = [[keyword for keyword in turn if keyword in c2id and keyword in concept_graph.nodes()] for turn in keywords_by_turn]
+    filtered_keywords = [[keyword[0] for keyword in turn if keyword[0].replace(" ", "_") in c2id and c2id[keyword[0].replace(" ", "_")] in concept_graph.nodes()] for turn in keywords_by_turn]
     return filtered_keywords
 
 def clean_line(line):
@@ -92,9 +93,6 @@ def clean_line(line):
 
 def encode_keywords(tokenizer, keywords, keyword_turn_mask, max_length, padding_side, pad_to_max_length=True):
     
-    if not isinstance(tokenizer, BartTokenizer):
-        raise AssertionError("This method hardcodes special token conventions from BART! Check before you use other tokenizers")
-
     extra_kw = {"add_prefix_space": True} if isinstance(tokenizer, BartTokenizer) else {}
     tokenizer.padding_side = padding_side
     tokenizer_outs = tokenizer(
@@ -221,13 +219,8 @@ class Seq2SeqDataset(Dataset):
             self.src_lens = self.src_lens[:n_obs]
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
-
-        self.keybert = KeyBERT()
-        p_tool = PreprocessTool()
-        c2id, id2c, _, _, = p_tool.load_resources()
-        self.c2id = c2id
-        self.id2c = id2c
-        self.cpnet = p_tool.load_cpnet()
+        with open(KEYWORDS_FILEPATH, "wb") as f:
+            self.keyword_lines, self.adjacency_matrices = pickle.read(f)
 
     def __len__(self):
         return len(self.src_lens)
@@ -236,6 +229,7 @@ class Seq2SeqDataset(Dataset):
         index = index + 1  # linecache starts at 1
         source_line = self.prefix + linecache.getline(str(self.src_file), index).rstrip("\n")
         tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
+
         assert source_line, f"empty source line for index {index}"
         assert tgt_line, f"empty tgt line for index {index}"
         domain_line = None
@@ -243,9 +237,10 @@ class Seq2SeqDataset(Dataset):
             domain_line = linecache.getline(str(self.domain_file), index).rstrip("\n")
             assert domain_line, f"empty domain line for index {index}"
 
-        dialog_utterances = clean_line(source_line)
-        keywords_by_turn = keywordify_dialogue(dialog_utterances)
+        keywords_by_turn = self.keyword_lines[index]
+        adjacency_matrix = torch.tensor(self.adjacency_matrices[index])
 
+        print(keywords_by_turn)
         all_keywords = list(itertools.chain(*keywords_by_turn))
         turn_mask = [1] * len(keywords_by_turn[0]) + [0] * len(list(itertools.chain(*keywords_by_turn[1:])))
         all_keyword_ids = torch.tensor([self.c2id[keyword] for keyword in all_keywords], dtype=torch.int64)
