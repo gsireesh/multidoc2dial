@@ -522,7 +522,8 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         doc_scores=retrieved.doc_scores.to(device), 
         num_beams=4, 
         num_return_sequences=n_return_sequences,
-        n_docs=n_docs
+        n_docs=n_docs,
+        rerank=False
         )
 
         generated_sentences = self.tokenizer.batch_decode(generated, skip_special_tokens=True)
@@ -557,8 +558,8 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
 
         # pdb.set_trace()
         output = BatchEncoding({
-            "context_input_ids": torch.stack(output_context_ids, dim=0)[:return_docs].to(device),
-            "context_attention_mask": torch.stack(output_attention_mask, dim=0)[:return_docs].to(device),
+            "context_input_ids": torch.stack(output_context_ids, dim=0)[:2*return_docs].to(device),
+            "context_attention_mask": torch.stack(output_attention_mask, dim=0)[:2*return_docs].to(device),
             "retrieved_doc_embeds": doc_embeds_tensor[:, :return_docs, :].to(device),
             "doc_ids" : retrieved.doc_ids[:, :return_docs].to(device),
             "doc_scores" : retrieved.doc_scores[:, :return_docs].to(device)
@@ -670,7 +671,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     current_out.cpu().detach().to(torch.float32).numpy(),
                     pooled_output_1.cpu().detach().to(torch.float32).numpy(),
                     prefix=self.generator.config.prefix,
-                    n_docs=n_docs,
+                    n_docs=n_docs * rerank_multiplier,
                     dialog_lengths=dialog_lengths,
                     domain=domain,
                     return_tensors="pt",
@@ -683,7 +684,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     combined_out.cpu().detach().to(torch.float32).numpy(),  ## sending dummy
                     combined_out.cpu().detach().to(torch.float32).numpy(),  ## sending dummy
                     prefix=self.generator.config.prefix,
-                    n_docs=n_docs,
+                    n_docs=n_docs * rerank_multiplier,
                     dialog_lengths=dialog_lengths,
                     domain=domain,
                     return_tensors="pt",
@@ -692,7 +693,9 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
 
             if rerank and self.tokenizer is not None:
                 questions = self.tokenizer.question_encoder.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-                out2 = self.rerank_docs(questions, out, n_docs=n_docs, device=combined_out.device, return_docs=n_docs)
+                out2 = self.rerank_docs(questions, out, n_docs=n_docs * rerank_multiplier, device=combined_out.device, return_docs=n_docs)
+
+            # pdb.set_trace()
 
             context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_scores = (
                 out2["context_input_ids"],
