@@ -515,6 +515,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         device="cpu",
         n_return_sequences=4,
         return_docs=5,
+        batch_size=2,
     ):  
         generated = self.generate(
         context_input_ids=retrieved["context_input_ids"].to(device),
@@ -554,15 +555,19 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                 output_attention_mask.append(retrieved.context_attention_mask[mapped_idx])
                 cur_embed_row.append(retrieved.retrieved_doc_embeds[i, mapped_idx])
 
+
+
         doc_embeds_tensor =  torch.stack([torch.stack(output_doc_embeds[i], dim=0) for i in range(len(output_doc_embeds))], dim=0)
+        batch_size_divide_factor = len(output_doc_embeds)
+        embed_idx = (batch_size // batch_size_divide_factor) * return_docs
 
         # pdb.set_trace()
         output = BatchEncoding({
-            "context_input_ids": torch.stack(output_context_ids, dim=0)[:2*return_docs].to(device),
-            "context_attention_mask": torch.stack(output_attention_mask, dim=0)[:2*return_docs].to(device),
-            "retrieved_doc_embeds": doc_embeds_tensor[:, :return_docs, :].to(device),
-            "doc_ids" : retrieved.doc_ids[:, :return_docs].to(device),
-            "doc_scores" : retrieved.doc_scores[:, :return_docs].to(device)
+            "context_input_ids": torch.stack(output_context_ids, dim=0)[:batch_size*return_docs].to(device),
+            "context_attention_mask": torch.stack(output_attention_mask, dim=0)[:batch_size*return_docs].to(device),
+            "retrieved_doc_embeds": doc_embeds_tensor[:, :embed_idx, :].to(device),
+            "doc_ids" : retrieved.doc_ids[:, :embed_idx].to(device),
+            "doc_scores" : retrieved.doc_scores[:, :embed_idx].to(device)
         })
 
         return output
@@ -691,9 +696,13 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     bm25=self.bm25,
                 )
 
+            # batch_size
+            batch_size = out.context_input_ids.shape[0] // (n_docs * rerank_multiplier)
+
             if rerank and self.tokenizer is not None:
+                # pdb.set_trace()
                 questions = self.tokenizer.question_encoder.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-                out2 = self.rerank_docs(questions, out, n_docs=n_docs * rerank_multiplier, device=combined_out.device, return_docs=n_docs)
+                out2 = self.rerank_docs(questions, out, n_docs=n_docs * rerank_multiplier, device=combined_out.device, return_docs=n_docs, batch_size=batch_size)
 
             # pdb.set_trace()
 
