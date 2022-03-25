@@ -18,7 +18,33 @@ def calc_retrieval_acc(data, k=100, ctx_key="ctxs"):
     return ct / len(data)
 
 
-def rider_rerank(data, q2pred, n_ctxs=100, n_pred=5, key='ctxs_rerank_100psg', mode='normal'):
+def rider_rerank(data, q2pred, n_ctxs=10, n_pred=4, key="reranked"):
+    return_ids_all = []
+    for d in tqdm(data):
+        d[key] = []
+        for ctx in d['ctxs'][:n_ctxs]:
+            # if contains reader predictions, add to new ctx list
+            pred = q2pred[d['question']]
+            has_answer_flag = has_answer(answers=set(pred[:n_pred]), text=ctx['title'] + ' ' + ctx['text'],
+                                            tokenizer=simple_tokenizer, match_type='string')
+            if has_answer_flag:
+                ctx_new = copy.deepcopy(ctx)
+                ctx_new['has_answer'] = None #has_answer(answers=d['answers'], text=ctx['title'] + ' ' + ctx['text'], tokenizer=simple_tokenizer, match_type='string')
+                d[key].append(ctx_new)
+
+        id_set = set([ctx['id'] for ctx in d[key]])
+        return_ids = list(id_set)
+        for ctx in d['ctxs'][:n_ctxs]:
+            if ctx['id'] not in id_set:
+                return_ids.append(ctx["id"])
+        return_ids_all.append(return_ids)
+    return return_ids_all
+        
+        
+        
+
+
+def rider_rerank_measure(data, q2pred, n_ctxs=100, n_pred=5, key='ctxs_rerank_100psg', mode='normal'):
     """
     @param data: the retriever results in the same format of DPR
     @param q2pred: a dict with key=question and value=[a list of predicted answers of some reader]

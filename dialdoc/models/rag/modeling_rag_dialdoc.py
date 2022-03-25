@@ -1,19 +1,23 @@
+import pdb
 from typing import List, Optional, Callable
 
 import torch
 
+from transformers import BatchEncoding
 from transformers.models.rag.modeling_rag import (
     RagModel,
     RagTokenForGeneration,
     RetrievAugLMOutput,
     RetrievAugLMMarginOutput,
 )
+from transformers import RagTokenizer
 from transformers.models.rag.retrieval_rag import RagRetriever
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 from transformers.generation_beam_search import BeamSearchScorer
 
 from dialdoc.models.rag.configuration_rag_dialdoc import DialDocRagConfig
+from dialdoc.models.rag.rider import rider_rerank
 
 from transformers.utils import logging
 
@@ -320,6 +324,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         question_encoder: Optional[PreTrainedModel] = None,
         generator: Optional[PreTrainedModel] = None,
         retriever: Optional = None,
+        tokenizer: Optional[RagTokenizer] = None,
         bm25: Optional = None,
         **kwargs,
     ):
@@ -345,6 +350,8 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                 config=config, question_encoder=question_encoder, generator=generator, retriever=retriever
             )
             self.bm25 = None
+
+        self.tokenizer = tokenizer
 
     def forward(
         self,
@@ -484,6 +491,81 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
     def get_attn_mask(tokens_tensor: torch.LongTensor) -> torch.tensor:
         return tokens_tensor != 0
 
+    def format_data_for_rider(self, questions, retrieved):
+        data = []
+        docs_dict_list = self.retriever.index.get_doc_dicts(retrieved.doc_ids)
+        for question, docs_dict, doc_ids in zip(questions, docs_dict_list, retrieved.doc_ids):
+            d = {"question": question, "answers": [], "ctxs": []}
+            for doc_id, text, title in zip(doc_ids, docs_dict["text"], docs_dict["title"]):
+                d["ctxs"].append({
+                    "id": doc_id.item(),
+                    "title": text,
+                    "text": title,
+                })
+            data.append(d)
+        return data
+
+
+
+    def rerank_docs(
+        self, 
+        questions,
+        retrieved,
+        n_docs=10,
+        device="cpu",
+        n_return_sequences=4,
+        return_docs=5,
+    ):  
+        generated = self.generate(
+        context_input_ids=retrieved["context_input_ids"].to(device),
+        context_attention_mask=retrieved["context_attention_mask"].to(device), 
+        doc_scores=retrieved.doc_scores.to(device), 
+        num_beams=4, 
+        num_return_sequences=n_return_sequences,
+        n_docs=n_docs
+        )
+
+        generated_sentences = self.tokenizer.batch_decode(generated, skip_special_tokens=True)
+        generated_sentences_by_batch_idx = [generated_sentences[i: i+ n_return_sequences] for i in range(0, len(generated_sentences), n_return_sequences)]
+
+        mappings = []
+        for instance in retrieved.doc_ids:
+            inst_map = {}
+            for i, doc_id in enumerate(instance):
+                inst_map[doc_id.item()] = i
+            mappings.append(inst_map)
+                
+
+        q2preds = {question: answers for question, answers in zip(questions, generated_sentences_by_batch_idx)}
+        data = self.format_data_for_rider(questions, retrieved)
+        ordered_doc_indices = rider_rerank(data, q2preds, n_ctxs=n_docs)
+
+        output_context_ids = []
+        output_attention_mask = []
+        output_doc_embeds = []
+
+        for i, (row, mapping) in enumerate(zip(ordered_doc_indices, mappings)):
+            cur_embed_row = []
+            output_doc_embeds.append(cur_embed_row)
+            for doc_idx in row:
+                mapped_idx = mapping[doc_idx]
+                output_context_ids.append(retrieved.context_input_ids[mapped_idx])
+                output_attention_mask.append(retrieved.context_attention_mask[mapped_idx])
+                cur_embed_row.append(retrieved.retrieved_doc_embeds[i, mapped_idx])
+
+        doc_embeds_tensor =  torch.stack([torch.stack(output_doc_embeds[i], dim=0) for i in range(len(output_doc_embeds))], dim=0)
+
+        # pdb.set_trace()
+        output = BatchEncoding({
+            "context_input_ids": torch.stack(output_context_ids, dim=0)[:return_docs].to(device),
+            "context_attention_mask": torch.stack(output_attention_mask, dim=0)[:return_docs].to(device),
+            "retrieved_doc_embeds": doc_embeds_tensor[:, :return_docs, :].to(device),
+            "doc_ids" : retrieved.doc_ids[:, :return_docs].to(device),
+            "doc_scores" : retrieved.doc_scores[:, :return_docs].to(device)
+        })
+
+        return output
+
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -515,10 +597,12 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         forced_bos_token_id: Optional[int] = None,
         forced_eos_token_id: Optional[int] = None,
         remove_invalid_values: Optional[bool] = None,
+        rerank: bool = True,
         **model_kwargs,
     ):
         # set default parameters
         n_docs = n_docs if n_docs is not None else self.config.n_docs
+        rerank_multiplier = 2 if rerank else 1
         num_beams = num_beams if num_beams is not None else self.config.num_beams
         num_beam_groups = num_beam_groups if num_beam_groups is not None else self.config.num_beam_groups
         max_length = max_length if max_length is not None else self.config.max_length
@@ -606,11 +690,15 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     bm25=self.bm25,
                 )
 
+            if rerank and self.tokenizer is not None:
+                questions = self.tokenizer.question_encoder.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+                out2 = self.rerank_docs(questions, out, n_docs=n_docs, device=combined_out.device, return_docs=n_docs)
+
             context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_scores = (
-                out["context_input_ids"],
-                out["context_attention_mask"],
-                out["retrieved_doc_embeds"],
-                out["doc_scores"],
+                out2["context_input_ids"],
+                out2["context_attention_mask"],
+                out2["retrieved_doc_embeds"],
+                out2["doc_scores"],
             )
 
             # set to correct device

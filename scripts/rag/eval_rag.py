@@ -6,13 +6,14 @@ import logging
 import os
 import sys
 
+import debugpy
 import pandas as pd
 import numpy as np
 import torch
 from tqdm import tqdm
 from datasets import load_metric
 
-from transformers import BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration
+from transformers import BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration, RagTokenizer
 from transformers import logging as transformers_logging
 
 
@@ -426,6 +427,7 @@ def get_args():
 
 
 def main(args):
+
     model_kwargs = {}
     if args.model_type is None:
         args.model_type = infer_model_type(args.model_name_or_path)
@@ -477,12 +479,13 @@ def main(args):
 
         if args.model_type.startswith("rag"):
             if "dialdoc" in args.model_type:
+                tokenizer = RagTokenizer.from_pretrained(os.path.join(args.model_name_or_path, "..", "rag-dpr-all-structure"))
                 retriever = DialDocRagRetriever.from_pretrained(checkpoint, **model_kwargs)
                 retriever.config.scoring_func = args.scoring_func
                 retriever.config.n_docs = args.n_docs
                 retriever.config.bm25 = args.bm25
                 retriever.config.mapping_file = args.mapping_file
-                model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
+                model = model_class.from_pretrained(checkpoint, retriever=retriever, tokenizer=tokenizer, **model_kwargs)
                 if bm25:
                     model.bm25 = bm25
                 model.config.scoring_func = args.scoring_func
