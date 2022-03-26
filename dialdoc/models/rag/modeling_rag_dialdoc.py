@@ -514,7 +514,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
             question_context_ids = retrieved.context_input_ids[source_offset: source_offset + n_docs_intermediate]
             passages = self.tokenizer.batch_decode(question_context_ids, skip_special_tokens=True)
             
-            tokenized_pairs = self.reranker_tokenizer(question_list, passages, truncation=True, padding=True, return_tensors="pt")
+            tokenized_pairs = self.reranker_tokenizer(question_list, passages, truncation=True, padding=True, return_tensors="pt").to(device)
             doc_scores = torch.squeeze(self.reranker_model(**tokenized_pairs).logits)
             top_indices = torch.topk(doc_scores, n_docs).indices
 
