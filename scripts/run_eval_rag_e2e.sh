@@ -29,5 +29,5 @@ python rag/eval_rag.py \
 --recalculate \
 --eval_all_checkpoints \
 --predictions_path results.txt \
---eval_batch_size 2 
+--eval_batch_size 1
 
