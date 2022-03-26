@@ -3,6 +3,7 @@ from typing import List, Optional, Callable
 
 import torch
 
+from transformers import BatchEncoding
 from transformers.models.rag.modeling_rag import (
     RagModel,
     RagTokenForGeneration,
@@ -496,10 +497,45 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
 
     
 
-    def rerank_documents(questions, retrieved, n_docs_intermediate, n_docs, device):
-        pdb.set_trace()
-        pass
+    def rerank_retrieved_docs(self, questions, retrieved, n_docs_intermediate, n_docs, device):
+        batch_size = retrieved.context_input_ids.shape[0] // n_docs_intermediate
 
+        out_context_vectors = torch.zeros(size=(n_docs * batch_size, retrieved.context_input_ids.shape[1]))
+        out_attention_mask = torch.zeros(size=(n_docs * batch_size, retrieved.context_attention_mask.shape[1])) 
+        out_doc_embeds = torch.zeros(size=(batch_size, n_docs, retrieved.retrieved_doc_embeds.shape[2]))
+        out_doc_ids = torch.zeros(size=(batch_size, n_docs))
+        out_doc_scores = torch.zeros(size=(batch_size, n_docs))
+
+        for i, question in enumerate(questions):
+
+            source_offset = i * n_docs_intermediate
+            target_offset = i* n_docs
+            question_list = [question] * n_docs_intermediate
+            question_context_ids = retrieved.context_input_ids[source_offset: source_offset + n_docs_intermediate]
+            passages = self.tokenizer.batch_decode(question_context_ids, skip_special_tokens=True)
+            
+            tokenized_pairs = self.reranker_tokenizer(question_list, passages, truncation=True, padding=True, return_tensors="pt")
+            doc_scores = torch.squeeze(self.reranker_model(**tokenized_pairs).logits)
+            top_indices = torch.topk(doc_scores, n_docs).indices
+
+
+            out_context_vectors[target_offset: target_offset + n_docs] = retrieved.context_input_ids[source_offset + top_indices]
+            out_attention_mask[target_offset: target_offset + n_docs] = retrieved.context_attention_mask[source_offset + top_indices]
+            out_doc_embeds[i] = retrieved.retrieved_doc_embeds[i][top_indices]
+            out_doc_ids[i] = retrieved.doc_ids[i][top_indices]
+            out_doc_scores[i] = retrieved.doc_scores[i][top_indices]
+
+        output = BatchEncoding({
+            "context_input_ids": out_context_vectors.to(device),
+            "context_attention_mask": out_attention_mask.to(device),
+            "retrieved_doc_embeds": out_doc_embeds.to(device),
+            "doc_ids" : out_doc_ids.to(device),
+            "doc_scores" : out_doc_scores.to(device)
+        })
+
+        return output
+
+    
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -526,7 +562,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         bad_words_ids=None,
         num_return_sequences=None,
         decoder_start_token_id=None,
-        n_docs_intermediate=None,
+        n_docs_intermediate=25,
         n_docs=None,
         prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], List[int]] = None,
         forced_bos_token_id: Optional[int] = None,
@@ -627,11 +663,9 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
 
             if rerank and self.reranker_tokenizer and self.reranker_model:
                 questions = self.tokenizer.question_encoder.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-                out2 = self.rerank_retrieved_docs(questions, out, n_docs_intermediate, n_docs, device=device)
+                out2 = self.rerank_retrieved_docs(questions, out, n_docs_intermediate, n_docs, device=combined_out.device)
 
             
-            pdb.set_trace()
-
             context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_scores = (
                 out2["context_input_ids"],
                 out2["context_attention_mask"],

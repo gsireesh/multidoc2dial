@@ -487,7 +487,7 @@ def main(args):
                 rag_tokenizer = RagTokenizer.from_pretrained(os.path.join(args.model_name_or_path, "..", "rag-dpr-all-structure"))
                 reranker_tokenizer =  AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2')
                 reranker_model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-TinyBERT-L-2-v2")
-
+                reranker_model.eval()
 
                 model = model_class.from_pretrained(checkpoint, retriever=retriever, reranker_tokenizer=reranker_tokenizer, reranker_model=reranker_model, rag_tokenizer=rag_tokenizer, **model_kwargs)
                 if bm25:
