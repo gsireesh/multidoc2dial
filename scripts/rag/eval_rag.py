@@ -12,7 +12,7 @@ import torch
 from tqdm import tqdm
 from datasets import load_metric
 
-from transformers import BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, RagTokenizer, BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration
 from transformers import logging as transformers_logging
 
 
@@ -271,6 +271,7 @@ def evaluate_batch_e2e(args, rag_model, questions, domains=None):
             early_stopping=False,
             num_return_sequences=1,
             bad_words_ids=[[0, 0]],  # BART likes to repeat BOS tokens, dont allow it to generate more than one
+            n_docs_intermediate=25
         )
         answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
@@ -482,7 +483,13 @@ def main(args):
                 retriever.config.n_docs = args.n_docs
                 retriever.config.bm25 = args.bm25
                 retriever.config.mapping_file = args.mapping_file
-                model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
+
+                rag_tokenizer = RagTokenizer.from_pretrained(os.path.join(args.model_name_or_path, "..", "rag-dpr-all-structure"))
+                reranker_tokenizer =  AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2')
+                reranker_model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-TinyBERT-L-2-v2")
+
+
+                model = model_class.from_pretrained(checkpoint, retriever=retriever, reranker_tokenizer=reranker_tokenizer, reranker_model=reranker_model, rag_tokenizer=rag_tokenizer, **model_kwargs)
                 if bm25:
                     model.bm25 = bm25
                 model.config.scoring_func = args.scoring_func

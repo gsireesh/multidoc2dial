@@ -1,3 +1,4 @@
+import pdb
 from typing import List, Optional, Callable
 
 import torch
@@ -320,6 +321,9 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         question_encoder: Optional[PreTrainedModel] = None,
         generator: Optional[PreTrainedModel] = None,
         retriever: Optional = None,
+        reranker_tokenizer: Optional = None,
+        reranker_model: Optional = None,
+        rag_tokenizer: Optional = None,
         bm25: Optional = None,
         **kwargs,
     ):
@@ -333,6 +337,12 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
             )
 
         super(RagTokenForGeneration, self).__init__(config)
+
+        self.reranker_tokenizer = reranker_tokenizer
+        self.reranker_model = reranker_model
+
+        self.tokenizer = rag_tokenizer
+
         # instantiate model
         if bm25:
             logger.info("Using bm25")
@@ -484,6 +494,12 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
     def get_attn_mask(tokens_tensor: torch.LongTensor) -> torch.tensor:
         return tokens_tensor != 0
 
+    
+
+    def rerank_documents(questions, retrieved, n_docs_intermediate, n_docs, device):
+        pdb.set_trace()
+        pass
+
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -510,11 +526,13 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         bad_words_ids=None,
         num_return_sequences=None,
         decoder_start_token_id=None,
+        n_docs_intermediate=None,
         n_docs=None,
         prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], List[int]] = None,
         forced_bos_token_id: Optional[int] = None,
         forced_eos_token_id: Optional[int] = None,
         remove_invalid_values: Optional[bool] = None,
+        rerank=True,
         **model_kwargs,
     ):
         # set default parameters
@@ -586,7 +604,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     current_out.cpu().detach().to(torch.float32).numpy(),
                     pooled_output_1.cpu().detach().to(torch.float32).numpy(),
                     prefix=self.generator.config.prefix,
-                    n_docs=n_docs,
+                    n_docs=n_docs_intermediate,
                     dialog_lengths=dialog_lengths,
                     domain=domain,
                     return_tensors="pt",
@@ -599,18 +617,26 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     combined_out.cpu().detach().to(torch.float32).numpy(),  ## sending dummy
                     combined_out.cpu().detach().to(torch.float32).numpy(),  ## sending dummy
                     prefix=self.generator.config.prefix,
-                    n_docs=n_docs,
+                    n_docs=n_docs_intermediate,
                     dialog_lengths=dialog_lengths,
                     domain=domain,
                     return_tensors="pt",
                     bm25=self.bm25,
                 )
 
+
+            if rerank and self.reranker_tokenizer and self.reranker_model:
+                questions = self.tokenizer.question_encoder.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+                out2 = self.rerank_retrieved_docs(questions, out, n_docs_intermediate, n_docs, device=device)
+
+            
+            pdb.set_trace()
+
             context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_scores = (
-                out["context_input_ids"],
-                out["context_attention_mask"],
-                out["retrieved_doc_embeds"],
-                out["doc_scores"],
+                out2["context_input_ids"],
+                out2["context_attention_mask"],
+                out2["retrieved_doc_embeds"],
+                out2["doc_scores"],
             )
 
             # set to correct device
