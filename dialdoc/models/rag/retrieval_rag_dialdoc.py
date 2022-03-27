@@ -645,9 +645,7 @@ class RerankingDialDocRagRetriever(DialDocRagRetriever):
         return cls(
             reranker_model,
             reranker_tokenizer,
-            retriever_name_or_path,
-            config,
-            *args,
+            config=config,
             question_encoder_tokenizer=question_encoder_tokenizer,
             generator_tokenizer=generator_tokenizer,
             index=index,
