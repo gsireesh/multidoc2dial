@@ -7,13 +7,13 @@ import psutil
 import torch
 import torch.distributed as dist
 
-from dialdoc.models.rag.retrieval_rag_dialdoc import DialDocRagRetriever
+from dialdoc.models.rag.retrieval_rag_dialdoc import RerankingDialDocRagRetriever
 
 
 logger = logging.getLogger(__name__)
 
 
-class RagPyTorchDistributedRetriever(DialDocRagRetriever):
+class RagPyTorchDistributedRetriever(RerankingDialDocRagRetriever):
     """
     A distributed retriever built on top of the ``torch.distributed`` communication package. During training all workers
     initialize their own instance of the retriever, however, only the main worker loads the index into memory. The index is stored
@@ -31,9 +31,11 @@ class RagPyTorchDistributedRetriever(DialDocRagRetriever):
             If specified, use this index instead of the one built using the configuration
     """
 
-    def __init__(self, config, question_encoder_tokenizer, generator_tokenizer, index=None):
+    def __init__(self, reranker_model, reranker_tokenizer, model_name_or_path, config, question_encoder_tokenizer, generator_tokenizer, index=None):
         super().__init__(
-            config,
+            reranker_model,
+            reranker_tokenizer, 
+            config=config,
             question_encoder_tokenizer=question_encoder_tokenizer,
             generator_tokenizer=generator_tokenizer,
             index=index,

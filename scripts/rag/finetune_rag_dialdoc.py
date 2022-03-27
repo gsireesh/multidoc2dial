@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 
 from transformers import (
     AutoConfig,
+    AutoModelForSequenceClassification,
     AutoTokenizer,
     BartForConditionalGeneration,
     BatchEncoding,
@@ -156,12 +157,17 @@ class GenerativeQAModule(BaseTransformer):
         # set extra_model_params for generator configs and load_model
         extra_model_params = ("encoder_layerdrop", "decoder_layerdrop", "attention_dropout", "dropout")
         if self.is_rag_model:
+            reranker_tokenizer =  AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2')
+            reranker_model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-TinyBERT-L-2-v2")
+            reranker_model.eval()
+
+
             if hparams.prefix is not None:
                 config.generator.prefix = hparams.prefix
             config.label_smoothing = hparams.label_smoothing
             hparams, config.generator = set_extra_model_params(extra_model_params, hparams, config.generator)
             if hparams.distributed_retriever == "pytorch":
-                retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
+                retriever = RagPyTorchDistributedRetriever.from_pretrained(reranker_model, reranker_tokenizer, hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
                 # The Ray retriever needs the handles to the retriever actors.
                 retriever = RagRayDistributedRetriever.from_pretrained(
