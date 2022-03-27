@@ -3,6 +3,7 @@
 export PYTHONPATH="../":"${PYTHONPATH}"
 domain=$1 # all dmv va ssa studentaid
 seg=$2  # token structure
+
 score=$3 # original reranking reranking_original
 task=$4 # grounding generation
 split=$5 # val test
@@ -28,6 +29,5 @@ python rag/eval_rag.py \
 --gold_data_mode ans \
 --recalculate \
 --eval_all_checkpoints \
---predictions_path results.txt \
---eval_batch_size 2 
-
+--predictions_path predictions_checkpoint11_reranker.txt \
+--eval_batch_size 4 

@@ -487,7 +487,6 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
     def get_attn_mask(tokens_tensor: torch.LongTensor) -> torch.tensor:
         return tokens_tensor != 0
 
-
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,
