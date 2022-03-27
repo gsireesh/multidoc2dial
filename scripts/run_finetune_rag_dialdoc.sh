@@ -26,14 +26,13 @@ python rag/finetune_rag_dialdoc.py \
     --passages_path $KB_FOLDER/my_knowledge_dataset \
     --index_path $KB_FOLDER/my_knowledge_dataset_index.faiss \
     --fp16 \
-    --profile \
     --do_train \
     --gpus 1 \
     --n_train -1 \
     --n_val -1 \
     --n_test -1 \
     --n_docs 5 \
-    --train_batch_size 8 \
+    --train_batch_size 2 \
     --eval_batch_size 2 \
     --max_combined_length 300 \
     --max_source_length 128 \
@@ -50,4 +49,4 @@ python rag/finetune_rag_dialdoc.py \
     --learning_rate 3e-05 \
     --num_train_epochs 2 \
     --warmup_steps 500 \
-    --gradient_accumulation_steps 1
+    --gradient_accumulation_steps 8
