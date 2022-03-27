@@ -1,3 +1,5 @@
+import pdb
+from re import S 
 from typing import List, Optional, Tuple
 
 import os
@@ -620,3 +622,79 @@ class DialDocRagRetriever(RagRetriever):
             },
             tensor_type=return_tensors,
         )
+
+class RerankingDialDocRagRetriever(DialDocRagRetriever):
+
+    def __init__(self, reranker_model, reranker_tokenizer, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reranker_model = reranker_model
+        self.reranker_tokenizer = reranker_tokenizer
+
+    @classmethod
+    def from_pretrained(cls, reranker_model, reranker_tokenizer, retriever_name_or_path, *args, indexed_dataset=None, **kwargs):
+        requires_backends(cls, ["datasets", "faiss"])
+        config = kwargs.pop("config", None) or DialDocRagConfig.from_pretrained(retriever_name_or_path, **kwargs)
+        rag_tokenizer = RagTokenizer.from_pretrained(retriever_name_or_path, config=config)
+        question_encoder_tokenizer = rag_tokenizer.question_encoder
+        generator_tokenizer = rag_tokenizer.generator
+        if indexed_dataset is not None:
+            config.index_name = "custom"
+            index = CustomHFIndex(config.retrieval_vector_size, indexed_dataset)
+        else:
+            index = cls._build_index(config)
+        return cls(
+            reranker_model,
+            reranker_tokenizer,
+            config,
+            question_encoder_tokenizer=question_encoder_tokenizer,
+            generator_tokenizer=generator_tokenizer,
+            index=index,
+        )
+
+    def rerank_retrieved_docs(self, questions, retrieved, n_docs_intermediate, n_docs, device):
+        batch_size = retrieved.context_input_ids.shape[0] // n_docs_intermediate
+
+        out_context_vectors = torch.zeros(size=(n_docs * batch_size, retrieved.context_input_ids.shape[1]))
+        out_attention_mask = torch.zeros(size=(n_docs * batch_size, retrieved.context_attention_mask.shape[1])) 
+        out_doc_embeds = torch.zeros(size=(batch_size, n_docs, retrieved.retrieved_doc_embeds.shape[2]))
+        out_doc_ids = torch.zeros(size=(batch_size, n_docs))
+        out_doc_scores = torch.zeros(size=(batch_size, n_docs))
+
+        for i, question in enumerate(questions):
+            source_offset = i * n_docs_intermediate
+            target_offset = i* n_docs
+            question_list = [question] * n_docs_intermediate
+            question_context_ids = retrieved.context_input_ids[source_offset: source_offset + n_docs_intermediate]
+            passages = self.generator_tokenizer.batch_decode(question_context_ids, skip_special_tokens=True)
+            
+            tokenized_pairs = self.reranker_tokenizer(question_list, passages, truncation=True, padding=True, return_tensors="pt")
+            doc_scores = torch.squeeze(self.reranker_model(**tokenized_pairs).logits)
+            top_indices = torch.topk(doc_scores, n_docs).indices
+
+
+            out_context_vectors[target_offset: target_offset + n_docs] = retrieved.context_input_ids[source_offset + top_indices]
+            out_attention_mask[target_offset: target_offset + n_docs] = retrieved.context_attention_mask[source_offset + top_indices]
+            out_doc_embeds[i] = retrieved.retrieved_doc_embeds[i][top_indices]
+            out_doc_ids[i] = retrieved.doc_ids[i][top_indices]
+            out_doc_scores[i] = retrieved.doc_scores[i][top_indices]
+
+        output = BatchEncoding({
+            "context_input_ids": out_context_vectors.to(device),
+            "context_attention_mask": out_attention_mask.to(device),
+            "retrieved_doc_embeds": out_doc_embeds.to(device),
+            "doc_ids" : out_doc_ids.to(device),
+            "doc_scores" : out_doc_scores.to(device)
+        })
+
+        return output
+    
+
+    def __call__(self, input_ids, *args, n_intermediate_docs=25, **kwargs):
+        questions = self.question_encoder_tokenizer.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+        n_docs = kwargs["n_docs"]
+        kwargs["n_docs"] = n_intermediate_docs
+        retrieved = super().__call__(input_ids, *args, **kwargs)
+        return self.rerank_retrieved_docs(questions, retrieved, n_intermediate_docs, n_docs, device=self.reranker_model.device)
+
+
+

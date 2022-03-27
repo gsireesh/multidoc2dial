@@ -19,7 +19,7 @@ from transformers import logging as transformers_logging
 sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score, load_bm25  # noqa: E402 # isort:skip
 from dialdoc.models.rag.modeling_rag_dialdoc import DialDocRagTokenForGeneration
-from dialdoc.models.rag.retrieval_rag_dialdoc import DialDocRagRetriever
+from dialdoc.models.rag.retrieval_rag_dialdoc import RerankingDialDocRagRetriever
 
 
 logger = logging.getLogger(__name__)
@@ -478,18 +478,17 @@ def main(args):
 
         if args.model_type.startswith("rag"):
             if "dialdoc" in args.model_type:
-                retriever = DialDocRagRetriever.from_pretrained(checkpoint, **model_kwargs)
+                reranker_tokenizer =  AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2')
+                reranker_model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-TinyBERT-L-2-v2")
+                reranker_model.eval()
+
+                retriever = RerankingDialDocRagRetriever.from_pretrained(reranker_model, reranker_tokenizer, checkpoint, n_intermediate_docs=25, **model_kwargs)
                 retriever.config.scoring_func = args.scoring_func
                 retriever.config.n_docs = args.n_docs
                 retriever.config.bm25 = args.bm25
                 retriever.config.mapping_file = args.mapping_file
 
-                rag_tokenizer = RagTokenizer.from_pretrained(os.path.join(args.model_name_or_path, "..", "rag-dpr-all-structure"))
-                reranker_tokenizer =  AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2')
-                reranker_model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-TinyBERT-L-2-v2")
-                reranker_model.eval()
-
-                model = model_class.from_pretrained(checkpoint, retriever=retriever, reranker_tokenizer=reranker_tokenizer, reranker_model=reranker_model, rag_tokenizer=rag_tokenizer, **model_kwargs)
+                model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
                 if bm25:
                     model.bm25 = bm25
                 model.config.scoring_func = args.scoring_func

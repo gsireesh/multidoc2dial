@@ -322,9 +322,6 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         question_encoder: Optional[PreTrainedModel] = None,
         generator: Optional[PreTrainedModel] = None,
         retriever: Optional = None,
-        reranker_tokenizer: Optional = None,
-        reranker_model: Optional = None,
-        rag_tokenizer: Optional = None,
         bm25: Optional = None,
         **kwargs,
     ):
@@ -338,11 +335,6 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
             )
 
         super(RagTokenForGeneration, self).__init__(config)
-
-        self.reranker_tokenizer = reranker_tokenizer
-        self.reranker_model = reranker_model
-
-        self.tokenizer = rag_tokenizer
 
         # instantiate model
         if bm25:
@@ -495,47 +487,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
     def get_attn_mask(tokens_tensor: torch.LongTensor) -> torch.tensor:
         return tokens_tensor != 0
 
-    
 
-    def rerank_retrieved_docs(self, questions, retrieved, n_docs_intermediate, n_docs, device):
-        batch_size = retrieved.context_input_ids.shape[0] // n_docs_intermediate
-
-        out_context_vectors = torch.zeros(size=(n_docs * batch_size, retrieved.context_input_ids.shape[1]))
-        out_attention_mask = torch.zeros(size=(n_docs * batch_size, retrieved.context_attention_mask.shape[1])) 
-        out_doc_embeds = torch.zeros(size=(batch_size, n_docs, retrieved.retrieved_doc_embeds.shape[2]))
-        out_doc_ids = torch.zeros(size=(batch_size, n_docs))
-        out_doc_scores = torch.zeros(size=(batch_size, n_docs))
-
-        for i, question in enumerate(questions):
-
-            source_offset = i * n_docs_intermediate
-            target_offset = i* n_docs
-            question_list = [question] * n_docs_intermediate
-            question_context_ids = retrieved.context_input_ids[source_offset: source_offset + n_docs_intermediate]
-            passages = self.tokenizer.batch_decode(question_context_ids, skip_special_tokens=True)
-            
-            tokenized_pairs = self.reranker_tokenizer(question_list, passages, truncation=True, padding=True, return_tensors="pt")
-            doc_scores = torch.squeeze(self.reranker_model(**tokenized_pairs).logits)
-            top_indices = torch.topk(doc_scores, n_docs).indices
-
-
-            out_context_vectors[target_offset: target_offset + n_docs] = retrieved.context_input_ids[source_offset + top_indices]
-            out_attention_mask[target_offset: target_offset + n_docs] = retrieved.context_attention_mask[source_offset + top_indices]
-            out_doc_embeds[i] = retrieved.retrieved_doc_embeds[i][top_indices]
-            out_doc_ids[i] = retrieved.doc_ids[i][top_indices]
-            out_doc_scores[i] = retrieved.doc_scores[i][top_indices]
-
-        output = BatchEncoding({
-            "context_input_ids": out_context_vectors.to(device),
-            "context_attention_mask": out_attention_mask.to(device),
-            "retrieved_doc_embeds": out_doc_embeds.to(device),
-            "doc_ids" : out_doc_ids.to(device),
-            "doc_scores" : out_doc_scores.to(device)
-        })
-
-        return output
-
-    
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -640,7 +592,8 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     current_out.cpu().detach().to(torch.float32).numpy(),
                     pooled_output_1.cpu().detach().to(torch.float32).numpy(),
                     prefix=self.generator.config.prefix,
-                    n_docs=n_docs_intermediate,
+                    n_docs=n_docs,
+                    n_intermediate_docs=n_docs_intermediate,
                     dialog_lengths=dialog_lengths,
                     domain=domain,
                     return_tensors="pt",
@@ -653,24 +606,20 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     combined_out.cpu().detach().to(torch.float32).numpy(),  ## sending dummy
                     combined_out.cpu().detach().to(torch.float32).numpy(),  ## sending dummy
                     prefix=self.generator.config.prefix,
-                    n_docs=n_docs_intermediate,
+                    n_docs=n_docs,
+                    n_intermediate_docs=n_docs_intermediate,
                     dialog_lengths=dialog_lengths,
                     domain=domain,
                     return_tensors="pt",
                     bm25=self.bm25,
                 )
 
-
-            if rerank and self.reranker_tokenizer and self.reranker_model:
-                questions = self.tokenizer.question_encoder.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
-                out2 = self.rerank_retrieved_docs(questions, out, n_docs_intermediate, n_docs, device=combined_out.device)
-
             
             context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_scores = (
-                out2["context_input_ids"],
-                out2["context_attention_mask"],
-                out2["retrieved_doc_embeds"],
-                out2["doc_scores"],
+                out["context_input_ids"],
+                out["context_attention_mask"],
+                out["retrieved_doc_embeds"],
+                out["doc_scores"],
             )
 
             # set to correct device
