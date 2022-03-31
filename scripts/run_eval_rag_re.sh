@@ -34,4 +34,4 @@ python rag/eval_rag.py \
 --gold_data_mode ans \
 --recalculate \
 --eval_all_checkpoints \
---predictions_path results.txt
+--predictions_path retrieval_results_reranker_finetuned_tinybert.txt

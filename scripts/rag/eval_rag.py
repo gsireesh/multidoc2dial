@@ -478,8 +478,8 @@ def main(args):
 
         if args.model_type.startswith("rag"):
             if "dialdoc" in args.model_type:
-                reranker_tokenizer =  AutoTokenizer.from_pretrained('cross-encoder/ms-marco-TinyBERT-L-2-v2')
-                reranker_model = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-TinyBERT-L-2-v2")
+                reranker_tokenizer =  AutoTokenizer.from_pretrained(os.path.join(os.environ["CHECKPOINTS"], "x-encoder-tinybert_refinetune"))
+                reranker_model = AutoModelForSequenceClassification.from_pretrained(os.path.join(os.environ["CHECKPOINTS"], "x-encoder-tinybert_refinetune"))
                 reranker_model.eval()
 
                 retriever = RerankingDialDocRagRetriever.from_pretrained(reranker_model, reranker_tokenizer, checkpoint, n_intermediate_docs=25, **model_kwargs)
