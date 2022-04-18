@@ -219,7 +219,7 @@ class Seq2SeqDataset(Dataset):
             self.src_lens = self.src_lens[:n_obs]
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
-        with open(KEYWORDS_FILEPATH, "wb") as f:
+        with open(os.getenv("KEYWORDS_FILEPATH"), "wb") as f:
             self.keyword_lines, self.adjacency_matrices = pickle.read(f)
 
     def __len__(self):
