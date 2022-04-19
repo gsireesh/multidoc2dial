@@ -40,7 +40,7 @@ python rag/finetune_rag_dialdoc.py \
     --n_val -1 \
     --n_test -1 \
     --n_docs 5 \
-    --train_batch_size 1 \
+    --train_batch_size 2 \
     --eval_batch_size 2 \
     --max_combined_length 300 \
     --max_source_length 128 \
@@ -55,6 +55,7 @@ python rag/finetune_rag_dialdoc.py \
     --max_grad_norm 0.1 \
     --lr_scheduler polynomial \
     --learning_rate 3e-05 \
-    --num_train_epochs 2 \
+    --num_train_epochs 4 \
     --warmup_steps 500 \
     --gradient_accumulation_steps 8
+    --logger_name wandb
