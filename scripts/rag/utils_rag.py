@@ -75,7 +75,7 @@ def keywordify_dialogue(keyword_extractor, dialogue, c2id, concept_graph):
             ) 
         for turn in dialogue]
 
-    filtered_keywords = [[keyword[0] for keyword in turn if keyword[0].replace(" ", "_") in c2id and c2id[keyword[0].replace(" ", "_")] in concept_graph.nodes()] for turn in keywords_by_turn]
+    filtered_keywords = [[keyword[0].replace(" ", "_") for keyword in turn if keyword[0].replace(" ", "_") in c2id and c2id[keyword[0].replace(" ", "_")] in concept_graph.nodes()] for turn in keywords_by_turn]
     return filtered_keywords
 
 def clean_line(line):
@@ -97,11 +97,11 @@ def encode_keywords(tokenizer, keywords, keyword_turn_mask, max_length, padding_
     tokenizer.padding_side = padding_side
     tokenizer_outs = tokenizer(
         keywords,
-        max_length=max_length,
-        padding="max_length" if pad_to_max_length else None,
         truncation=True,
+        padding=True, 
         return_tensors="pt",
-        add_special_tokens=True,
+        add_special_tokens=False,
+        return_length=True,
         **extra_kw,
     )
     input_ids = [101]
@@ -111,13 +111,12 @@ def encode_keywords(tokenizer, keywords, keyword_turn_mask, max_length, padding_
     keyword_idx_map = [-1]
 
 
-    for i, (keyword_token_list, turn_idx) in enumerate(zip(tokenizer_outs["input_ids"], keyword_turn_mask)):
-        n_tokens = len(keyword_token_list)
+    for i, (keyword_token_list, turn_idx, n_tokens) in enumerate(zip(tokenizer_outs["input_ids"], keyword_turn_mask, tokenizer_outs["length"])):
         turn_mask.extend([turn_idx] * n_tokens)
         keyword_idx_map.extend([i] * n_tokens)
         input_ids.extend(keyword_token_list)
-        attention_mask.extend(tokenizer_outs[i]["attention_mask"])
-        token_type_ids.extend(tokenizer_outs[i]["token_type_ids"])
+        attention_mask.extend(tokenizer_outs["attention_mask"][i][:n_tokens])
+        token_type_ids.extend(tokenizer_outs["token_type_ids"][i][:n_tokens])
 
     # add the EOS token
     input_ids.append(102)
@@ -219,8 +218,11 @@ class Seq2SeqDataset(Dataset):
             self.src_lens = self.src_lens[:n_obs]
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
-        with open(os.getenv("KEYWORDS_FILEPATH"), "wb") as f:
+        with open(os.path.join(os.getenv("DATA_DIR"), f"{type_path}.keywords"), "rb") as f:
             self.keyword_lines, self.adjacency_matrices = pickle.load(f)
+
+        pt = PreprocessTool()
+        self.c2id, _, _, _, = pt.load_resources()
 
     def __len__(self):
         return len(self.src_lens)
@@ -240,10 +242,9 @@ class Seq2SeqDataset(Dataset):
         keywords_by_turn = self.keyword_lines[index]
         adjacency_matrix = torch.tensor(self.adjacency_matrices[index])
 
-        print(keywords_by_turn)
         all_keywords = list(itertools.chain(*keywords_by_turn))
         turn_mask = [1] * len(keywords_by_turn[0]) + [0] * len(list(itertools.chain(*keywords_by_turn[1:])))
-        all_keyword_ids = torch.tensor([self.c2id[keyword] for keyword in all_keywords], dtype=torch.int64)
+        all_keyword_ids = torch.tensor([self.c2id[keyword.replace(" ", "_")] for keyword in all_keywords], dtype=torch.int64)
     
 
         # Need to add eos token manually for T5

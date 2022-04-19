@@ -5,6 +5,7 @@ export TOKENIZERS_PARALLELISM=false
 
 export CHECKPOINTS=/usr0/home/sgururaj/src/11-797-multidoc2dial/multidoc2dial/checkpoints
 export HF_HOME=~/hf_home
+export KEYWORDS_FILEPATH=../data/mdd_all/dd-generation-structure/train.keywords
 
 domain=$1 # all dmv ssa va studentaid
 seg=$2 # token structure
