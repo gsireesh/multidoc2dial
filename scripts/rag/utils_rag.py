@@ -95,6 +95,9 @@ def encode_keywords(tokenizer, keywords, keyword_turn_mask, max_length, padding_
     
     extra_kw = {"add_prefix_space": True} if isinstance(tokenizer, BartTokenizer) else {}
     tokenizer.padding_side = padding_side
+    if not keywords:
+        keywords = ["placeholder"]
+        keyword_turn_mask = [1]
     tokenizer_outs = tokenizer(
         keywords,
         truncation=True,
@@ -111,10 +114,11 @@ def encode_keywords(tokenizer, keywords, keyword_turn_mask, max_length, padding_
     keyword_idx_map = [-1]
 
 
-    for i, (keyword_token_list, turn_idx, n_tokens) in enumerate(zip(tokenizer_outs["input_ids"], keyword_turn_mask, tokenizer_outs["length"])):
+    for i, (keyword_token_list, turn_idx) in enumerate(zip(tokenizer_outs["input_ids"], keyword_turn_mask)):
+        n_tokens = keyword_token_list.nonzero()[-1].item() + 1
         turn_mask.extend([turn_idx] * n_tokens)
         keyword_idx_map.extend([i] * n_tokens)
-        input_ids.extend(keyword_token_list)
+        input_ids.extend(keyword_token_list[:n_tokens])
         attention_mask.extend(tokenizer_outs["attention_mask"][i][:n_tokens])
         token_type_ids.extend(tokenizer_outs["token_type_ids"][i][:n_tokens])
 
@@ -239,8 +243,9 @@ class Seq2SeqDataset(Dataset):
             domain_line = linecache.getline(str(self.domain_file), index).rstrip("\n")
             assert domain_line, f"empty domain line for index {index}"
 
-        keywords_by_turn = self.keyword_lines[index]
-        adjacency_matrix = torch.tensor(self.adjacency_matrices[index])
+        # fixing index so that it corresponds to linecache
+        keywords_by_turn = self.keyword_lines[index - 1]
+        adjacency_matrix = torch.tensor(self.adjacency_matrices[index - 1])
 
         all_keywords = list(itertools.chain(*keywords_by_turn))
         turn_mask = [1] * len(keywords_by_turn[0]) + [0] * len(list(itertools.chain(*keywords_by_turn[1:])))
