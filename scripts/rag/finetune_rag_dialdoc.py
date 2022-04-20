@@ -314,7 +314,7 @@ class GenerativeQAModule(BaseTransformer):
         logs["tpb"] = (
             batch["input_ids"].ne(src_pad_token_id).sum() + batch["decoder_input_ids"].ne(tgt_pad_token_id).sum()
         )
-
+        self.logger.log_metrics(dict(**logs, **{"loss": loss})
         return {"loss": loss_tensors[0], "log": logs}
 
     def validation_step(self, batch, batch_idx) -> Dict:
@@ -341,6 +341,7 @@ class GenerativeQAModule(BaseTransformer):
         metrics["step_count"] = self.step_count
         self.save_metrics(metrics, prefix)  # writes to self.metrics_save_path
         preds = flatten_list([x["preds"] for x in outputs])
+        self.logger.log_metrics({**metrics, **{"preds": preds, f"{prefix}_loss": loss, f"{prefix}_{self.val_metric}": metrics_tensor}})
         return {"log": metrics, "preds": preds, f"{prefix}_loss": loss, f"{prefix}_{self.val_metric}": metrics_tensor}
 
     def save_metrics(self, latest_metrics, type_path) -> None:
