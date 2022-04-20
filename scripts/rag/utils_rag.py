@@ -279,6 +279,7 @@ class Seq2SeqDataset(Dataset):
             "turn_mask": keyword_inputs["turn_mask"],
             "keyword_idx_map": keyword_inputs["keyword_idx_map"],
             "keyword_ids": all_keyword_ids,
+            "adjacency_matrices": adjacency_matrix
         }
 
     @staticmethod
