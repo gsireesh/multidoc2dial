@@ -297,6 +297,16 @@ class Seq2SeqDataset(Dataset):
         keyword_idx_map = torch.stack([x["keyword_idx_map"] for x in batch])
         keyword_ids = torch.nn.utils.rnn.pad_sequence([x["keyword_ids"] for x in batch], batch_first=True, padding_value=-1)
 
+        max_n_keywords = max([len(x["keyword_ids"]) for x in batch])
+        adjacency_matrices_list = []
+        for instance in batch:
+            adj = instance["adjacency_matrices"]
+            pad_size = max_n_keywords - adj.shape[0]
+            adjacency_matrix = torch.nn.functional.pad(adj, (0, pad_size, 0, pad_size), value=-1)
+            adjacency_matrices_list.append(adjacency_matrix)
+
+        adjacency_matrices = torch.stack(adjacency_matrices_list)
+
 
         tgt_pad_token_id = (
             self.tokenizer.generator.pad_token_id
@@ -322,6 +332,7 @@ class Seq2SeqDataset(Dataset):
             "turn_mask": turn_masks,
             "keyword_idx_map": keyword_idx_map,
             "keyword_ids": keyword_ids,
+            "adjacency_matrices": adjacency_matrices
 
         }
         return batch

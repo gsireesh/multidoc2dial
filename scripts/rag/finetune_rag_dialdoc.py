@@ -243,12 +243,13 @@ class GenerativeQAModule(BaseTransformer):
 
     def _step(self, batch: dict) -> Tuple:
         # source_ids, source_mask, target_ids = batch["input_ids"], batch["attention_mask"], batch["decoder_input_ids"]
-        source_ids, source_mask, token_type_ids, target_ids, domain = (
+        source_ids, source_mask, token_type_ids, target_ids, domain, adjacency_matrices = (
             batch["input_ids"],
             batch["attention_mask"],
             batch["token_type_ids"],
             batch["decoder_input_ids"],
             batch["domain"],
+            batch["adjacency_matrices"]
         )
 
         rag_kwargs = {}
@@ -286,6 +287,7 @@ class GenerativeQAModule(BaseTransformer):
             use_cache=False,
             labels=lm_labels,
             domain=domain,
+            adjacency_matrices=adjacency_matrices,
             **rag_kwargs,
         )
 

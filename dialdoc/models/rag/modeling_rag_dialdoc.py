@@ -1,3 +1,5 @@
+import math
+import sys
 from typing import List, Optional, Callable
 
 import torch
@@ -17,10 +19,12 @@ from dialdoc.models.rag.configuration_rag_dialdoc import DialDocRagConfig
 
 from transformers.utils import logging
 
+sys.path.append("../../GRADE")
+from model.evaluation_model.GRADE.model_util.GAT import GATLayer
+
 logger = logging.get_logger(__name__)
 
 
-# TODO
 class DialDocRagModel(RagModel):
     def __init__(
         self,
@@ -65,6 +69,8 @@ class DialDocRagModel(RagModel):
         if self.bm25:
             logger.info("Using BM25 inside RAG Model")
 
+        self.gat = GATLayer(1024, 1024, alpha=0.2, device=self.question_encoder.device)
+
     @staticmethod
     def mean_pool(vector: torch.LongTensor):
         return vector.sum(axis=0) / vector.shape[0]
@@ -91,6 +97,8 @@ class DialDocRagModel(RagModel):
         output_retrieved=None,
         n_docs=None,
         domain=None,
+        context_keyword_map=None, 
+        adjacency_matrices=None
     ):
         n_docs = n_docs if n_docs is not None else self.config.n_docs
         use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -183,12 +191,14 @@ class DialDocRagModel(RagModel):
                     retrieved_doc_embeds,
                     retrieved_doc_ids,
                     retrieved_doc_scores,
+                    context_keyword_map
                 ) = (
                     retriever_outputs["context_input_ids"],
                     retriever_outputs["context_attention_mask"],
                     retriever_outputs["retrieved_doc_embeds"],
                     retriever_outputs["doc_ids"],
                     retriever_outputs["doc_scores"],
+                    retriever_outputs["context_keyword_map"]
                 )
 
                 # set to correct device
@@ -196,6 +206,7 @@ class DialDocRagModel(RagModel):
                 context_input_ids = context_input_ids.to(input_ids)
                 context_attention_mask = context_attention_mask.to(input_ids)
                 doc_scores = retrieved_doc_scores.to(combined_out)
+                context_keyword_map.to(combined_out)
 
                 # compute doc_scores
                 if self.config.scoring_func in [
@@ -263,6 +274,40 @@ class DialDocRagModel(RagModel):
         if decoder_attention_mask is not None:
             decoder_attention_mask = decoder_attention_mask.repeat_interleave(n_docs, dim=0)
 
+        if encoder_outputs is None:
+            encoder_outputs = self.generator.model.encoder(
+                    input_ids=context_input_ids,
+                    attention_mask=context_attention_mask,
+            )
+        # GAT the context keywords
+
+        if context_keyword_map is not None:
+            for i, (keyword_map, adjacency_matrix) in enumerate(zip(context_keyword_map, adjacency_matrices)):
+                keyword_representations = []
+                adjacency_matrix = adjacency_matrix[adjacency_matrix != -1]
+                if len(adjacency_matrix) == 0:
+                    continue
+                n_keywords = int(math.sqrt(len(adjacency_matrix)))
+                adjacency_matrix = adjacency_matrix.reshape((n_keywords, n_keywords))
+                if "placeholder" in self.retriever.question_encoder_tokenizer.decode(input_ids[i]):
+                    continue
+                for keyword_idx in range(n_keywords):
+                    keyword_tokens = encoder_outputs["last_hidden_state"][0, (keyword_map == keyword_idx).squeeze()]
+                    if torch.all(torch.isnan(keyword_tokens)):
+                        continue
+                    keyword_rep = torch.mean(keyword_tokens, dim=0)
+                    keyword_representations.append(keyword_rep)
+                keyword_representations = torch.stack(keyword_representations).to(self.device)
+                updated_representations = self.gat(keyword_representations, adjacency_matrix[None, :].type(torch.FloatTensor).to(self.device))
+
+                # Add the GAT context back in
+                for i, keyword in enumerate(updated_representations):
+                    encoder_outputs["last_hidden_state"][i*self.config.n_docs: (i + 1) * self.config.n_docs, keyword_map == i] += updated_representations[0, i]
+
+        
+
+
+        # modify this call to take the updated embeddings
         gen_outputs = self.generator(
             input_ids=context_input_ids,
             attention_mask=context_attention_mask,
@@ -368,6 +413,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         labels=None,
         n_docs=None,
         domain=None,
+        adjacency_matrices=None,
         **kwargs,  # needs kwargs for generation
     ):
         r"""
@@ -439,6 +485,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
             output_retrieved=output_retrieved,
             n_docs=n_docs,
             domain=domain,
+            adjacency_matrices=adjacency_matrices
         )
 
         loss = None
@@ -485,7 +532,6 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
     def get_attn_mask(tokens_tensor: torch.LongTensor) -> torch.tensor:
         return tokens_tensor != 0
 
-    # this is where validation stuff happens
     def generate(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -608,11 +654,12 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
                     bm25=self.bm25,
                 )
 
-            context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_scores = (
+            context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_scores, context_keyword_map = (
                 out["context_input_ids"],
                 out["context_attention_mask"],
                 out["retrieved_doc_embeds"],
                 out["doc_scores"],
+                out["context_keyword_map"]
             )
 
             # set to correct device
@@ -620,6 +667,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
             context_input_ids = context_input_ids.to(input_ids)
             context_attention_mask = context_attention_mask.to(input_ids)
             doc_scores = retrieved_doc_scores.to(combined_out)
+            context_keyword_map = context_keyword_map.to(combined_out)
 
             # compute doc_scores
             if self.config.scoring_func in [
@@ -698,6 +746,7 @@ class DialDocRagTokenForGeneration(RagTokenForGeneration):
         model_kwargs["encoder_outputs"] = encoder_outputs
         model_kwargs["attention_mask"] = context_attention_mask
         model_kwargs["n_docs"] = n_docs
+        model_kwargs["context_keyword_map"] = context_keyword_map
 
         pre_processor = self._get_logits_processor(
             repetition_penalty=repetition_penalty,

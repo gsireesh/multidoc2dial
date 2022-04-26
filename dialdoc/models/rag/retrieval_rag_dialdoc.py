@@ -420,7 +420,18 @@ class DialDocRagRetriever(RagRetriever):
             truncation=True,
         )
 
-        return contextualized_inputs["input_ids"], contextualized_inputs["attention_mask"]
+        keyword_map = []
+        for string_i in input_strings:
+            keyword_idxs = [-1]
+            for i, keyword in enumerate(string_i.split(" ")):
+                n_tokens = len(self.generator_tokenizer.tokenize(keyword))
+                keyword_idxs.extend([i] * n_tokens)
+            keyword_idxs.extend([-1] * (self.config.max_combined_length - len(keyword_idxs)))
+            keyword_map.append(keyword_idxs)
+
+        keyword_map = torch.tensor(keyword_map, dtype=torch.int64)
+
+        return contextualized_inputs["input_ids"], contextualized_inputs["attention_mask"], keyword_map
 
     def _main_retrieve(
         self,
@@ -607,7 +618,7 @@ class DialDocRagRetriever(RagRetriever):
                 dialog_lengths=dialog_lengths,
                 domain=domain,
             )
-        context_input_ids, context_attention_mask = self.postprocess_docs(
+        context_input_ids, context_attention_mask, context_keyword_map = self.postprocess_docs(
             docs, input_strings, prefix, n_docs, return_tensors=return_tensors
         )
 
@@ -618,6 +629,7 @@ class DialDocRagRetriever(RagRetriever):
                 "retrieved_doc_embeds": retrieved_doc_embeds,
                 "doc_ids": doc_ids,
                 "doc_scores": doc_scores,
+                "context_keyword_map": context_keyword_map
             },
             tensor_type=return_tensors,
         )
